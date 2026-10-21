@@ -33,6 +33,7 @@ namespace osu.Framework.Configuration
             SetDefault(FrameworkSetting.LastDisplayDevice, DisplayIndex.Default);
             SetDefault(FrameworkSetting.AudioDevice, string.Empty);
             SetDefault(FrameworkSetting.AudioUseExperimentalWasapi, false);
+            SetDefault(FrameworkSetting.AudioWasapiExclusive, false);
             SetDefault(FrameworkSetting.VolumeUniversal, 1.0, 0.0, 1.0, 0.01);
             SetDefault(FrameworkSetting.VolumeMusic, 1.0, 0.0, 1.0, 0.01);
             SetDefault(FrameworkSetting.VolumeEffect, 1.0, 0.0, 1.0, 0.01);
@@ -81,6 +82,11 @@ namespace osu.Framework.Configuration
 
         AudioDevice,
         AudioUseExperimentalWasapi,
+
+        /// <summary>
+        /// Reprise: with experimental WASAPI, whether the device is taken in exclusive mode (only this application's sound, at the lowest latency).
+        /// </summary>
+        AudioWasapiExclusive,
         VolumeUniversal,
         VolumeEffect,
         VolumeMusic,

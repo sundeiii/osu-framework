@@ -106,6 +106,12 @@ namespace osu.Framework.Audio
         public readonly BindableBool UseExperimentalWasapi = new BindableBool();
 
         /// <summary>
+        /// Reprise: with <see cref="UseExperimentalWasapi"/>, take the device in WASAPI exclusive mode: nothing else can play on it meanwhile, for
+        /// the lowest latency. When the device can't be had exclusively (another application has it, or it has no format for it), shared mode is used.
+        /// </summary>
+        public readonly BindableBool UseWasapiExclusive = new BindableBool();
+
+        /// <summary>
         /// Volume of all samples played game-wide.
         /// </summary>
         public readonly BindableDouble VolumeSample = new BindableDouble(1)
@@ -193,6 +199,7 @@ namespace osu.Framework.Audio
                 // attach config bindables
                 config.BindWith(FrameworkSetting.AudioDevice, AudioDevice);
                 config.BindWith(FrameworkSetting.AudioUseExperimentalWasapi, UseExperimentalWasapi);
+                config.BindWith(FrameworkSetting.AudioWasapiExclusive, UseWasapiExclusive);
                 config.BindWith(FrameworkSetting.VolumeUniversal, Volume);
                 config.BindWith(FrameworkSetting.VolumeEffect, VolumeSample);
                 config.BindWith(FrameworkSetting.VolumeMusic, VolumeTrack);
@@ -200,6 +207,11 @@ namespace osu.Framework.Audio
 
             AudioDevice.ValueChanged += _ => scheduler.AddOnce(initCurrentDevice);
             UseExperimentalWasapi.ValueChanged += _ => scheduler.AddOnce(initCurrentDevice);
+            UseWasapiExclusive.ValueChanged += _ =>
+            {
+                if (UseExperimentalWasapi.Value)
+                    scheduler.AddOnce(initCurrentDevice);
+            };
             // initCurrentDevice not required for changes to `GlobalMixerHandle` as it is only changed when experimental wasapi is toggled (handled above).
             GlobalMixerHandle.ValueChanged += handle => usingGlobalMixer.Value = handle.NewValue.HasValue;
 
@@ -449,7 +461,7 @@ namespace osu.Framework.Audio
 
             bool attemptInit()
             {
-                bool innerSuccess = thread.InitDevice(device, UseExperimentalWasapi.Value);
+                bool innerSuccess = thread.InitDevice(device, UseExperimentalWasapi.Value, UseWasapiExclusive.Value);
                 bool alreadyInitialised = Bass.LastError == Errors.Already;
 
                 if (alreadyInitialised)

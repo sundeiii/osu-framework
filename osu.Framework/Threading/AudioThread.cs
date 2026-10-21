@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Threading;
 using ManagedBass;
 using ManagedBass.Mix;
 using ManagedBass.Wasapi;
@@ -126,12 +127,23 @@ namespace osu.Framework.Threading
         private ScheduledDelegate? wasapiPendingRecoveryInit;
 
         /// <summary>
+        /// Reprise: whether BASS's own output is stopped, for WASAPI to have the device exclusively (it holds the device while running, even
+        /// though everything plays through WASAPI's mixer then).
+        /// </summary>
+        private bool bassOutputStopped;
+
+        /// <summary>
+        /// Reprise: whether WASAPI was last asked for exclusively, for its recovery after a default output change or failure.
+        /// </summary>
+        private bool wasapiExclusive;
+
+        /// <summary>
         /// If a global mixer is being used, this will be the BASS handle for it.
         /// If non-null, all game mixers should be added to this mixer.
         /// </summary>
         private readonly Bindable<int?> globalMixerHandle = new Bindable<int?>();
 
-        internal bool InitDevice(int deviceId, bool useExperimentalWasapi)
+        internal bool InitDevice(int deviceId, bool useExperimentalWasapi, bool wasapiExclusive = false)
         {
             Debug.Assert(ThreadSafety.IsAudioThread);
             Trace.Assert(deviceId != -1); // The real device ID should always be used, as the -1 device has special cases which are hard to work with.
@@ -141,7 +153,7 @@ namespace osu.Framework.Threading
                 return false;
 
             if (useExperimentalWasapi)
-                attemptWasapiInitialisation();
+                attemptWasapiInitialisation(wasapiExclusive);
             else
                 freeWasapi();
 
@@ -183,7 +195,7 @@ namespace osu.Framework.Threading
             }
         }
 
-        private bool attemptWasapiInitialisation()
+        private bool attemptWasapiInitialisation(bool exclusive)
         {
             if (RuntimeInfo.OS != RuntimeInfo.Platform.Windows)
                 return false;
@@ -220,10 +232,48 @@ namespace osu.Framework.Threading
 
             // To keep things in a sane state let's only keep one device initialised via wasapi.
             freeWasapi();
-            return initWasapi(wasapiDevice);
+
+            // Reprise: exclusive when asked for, else (or when the device can't be had exclusively) shared.
+            wasapiExclusive = exclusive;
+
+            if (exclusive && initExclusive(wasapiDevice))
+                return true;
+
+            return initWasapi(wasapiDevice, false);
         }
 
-        private bool initWasapi(int wasapiDevice)
+        /// <summary>
+        /// Reprise: WASAPI on the device exclusively. BASS's own output is stopped first (it holds the device otherwise) and started again when
+        /// the device can't be had.
+        /// </summary>
+        private bool initExclusive(int wasapiDevice)
+        {
+            bassOutputStopped = Bass.Stop();
+
+            // Windows lets go of the device a moment after BASS's output stops: until then, it's busy.
+            for (int attempt = 0; attempt < 20; attempt++)
+            {
+                if (initWasapi(wasapiDevice, true))
+                    return true;
+
+                Thread.Sleep(25);
+            }
+
+            Logger.Log($"BassWasapi couldn't take device {wasapiDevice} exclusively ({Bass.LastError}), using it shared", level: LogLevel.Important);
+            restartBassOutput();
+            return false;
+        }
+
+        private void restartBassOutput()
+        {
+            if (!bassOutputStopped)
+                return;
+
+            Bass.Start();
+            bassOutputStopped = false;
+        }
+
+        private bool initWasapi(int wasapiDevice, bool exclusive)
         {
             // This is intentionally initialised inline and stored to a field.
             // If we don't do this, it gets GC'd away.
@@ -261,13 +311,19 @@ namespace osu.Framework.Threading
                 {
                     freeWasapi();
 
-                    if (initWasapi(device))
+                    // Reprise: back in the mode that was asked for (exclusive when the device can be had so, else shared).
+                    if ((wasapiExclusive && initExclusive(device)) || initWasapi(device, false))
                         updateAudioManagers();
                 });
             };
 
-            bool initialised = BassWasapi.Init(wasapiDevice, Procedure: wasapiProcedure, Flags: WasapiInitFlags.EventDriven | WasapiInitFlags.AutoFormat, Buffer: 0f, Period: float.Epsilon);
-            Logger.Log($"Initialising BassWasapi for device {wasapiDevice}...{(initialised ? "success!" : "FAILED")}");
+            var flags = WasapiInitFlags.EventDriven | WasapiInitFlags.AutoFormat;
+
+            if (exclusive)
+                flags |= WasapiInitFlags.Exclusive;
+
+            bool initialised = BassWasapi.Init(wasapiDevice, Procedure: wasapiProcedure, Flags: flags, Buffer: 0f, Period: float.Epsilon);
+            Logger.Log($"Initialising BassWasapi ({(exclusive ? "exclusive" : "shared")}) for device {wasapiDevice}...{(initialised ? "success!" : "FAILED")}");
 
             if (!initialised)
                 return false;
@@ -289,6 +345,9 @@ namespace osu.Framework.Threading
             BassWasapi.Stop();
             BassWasapi.Free();
             globalMixerHandle.Value = null;
+
+            // Reprise: BASS's own output back (it was stopped for exclusive mode).
+            restartBassOutput();
         }
 
         private void updateAudioManagers()
