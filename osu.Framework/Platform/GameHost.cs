@@ -505,7 +505,9 @@ namespace osu.Framework.Platform
             // Do *not* allow tearing when VRR enabled, not even in fullscreen via mechanisms like FifoRelaxed, to ensure we can pace
             // the monitor's refresh cycle correctly.
             bool isVrr = frameSyncMode.Value == FrameSync.VSyncVRR;
-            Renderer.AllowTearing = windowMode.Value == WindowMode.Fullscreen && !isVrr;
+            // Reprise: borderless too (a window covering the screen gets independent flip on Windows): without it Windows holds every
+            // frame to the refresh rate there, so an unlimited frame rate was capped at it (with the latency that brings).
+            Renderer.AllowTearing = (windowMode.Value == WindowMode.Fullscreen || windowMode.Value == WindowMode.Borderless) && !isVrr;
 
             TripleBuffer<DrawNode>.Buffer buffer;
 
